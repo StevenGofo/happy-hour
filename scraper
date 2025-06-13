@@ -1,0 +1,96 @@
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
+from bs4 import BeautifulSoup
+import json
+import time
+
+URL = "https://flowingtidepub.com/happy-hour/"
+
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+def get_rendered_html(url):
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    driver.get(url)
+
+    time.sleep(5)
+
+    iframes = driver.find_elements(By.TAG_NAME, "iframe")
+    print(f"Found {len(iframes)} iframe(s)")
+
+    found = False
+    for i, iframe in enumerate(iframes):
+        driver.switch_to.frame(iframe)
+        print(f"Switched to iframe #{i}")
+
+        # Check if this iframe has the desired content
+        if "fl-rich-text" in driver.page_source:
+            print("✅ Found fl-rich-text inside iframe.")
+            found = True
+            break
+        else:
+            driver.switch_to.default_content()
+
+    if not found:
+        print("❌ Could not find iframe with fl-rich-text.")
+        driver.quit()
+        return ""
+
+    # Now wait for content to render inside the iframe
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CLASS_NAME, "fl-rich-text"))
+        )
+    except Exception as e:
+        print("Timed out waiting for fl-rich-text:", e)
+
+    # Get the HTML from the iframe context
+    html = driver.page_source
+    with open("rendered_output.html", "w", encoding="utf-8") as f:
+        f.write(html)
+
+    driver.quit()
+    return html
+
+
+
+def scrape_flowing_tide():
+    html = get_rendered_html(URL)
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Target the div with the actual happy hour text
+    rich_text_divs = soup.find_all("div", class_="fl-rich-text")
+
+    locations = []
+
+    for div in rich_text_divs:
+        paragraph = div.find("p")
+        if paragraph:
+            # Replace <br> tags with newlines so we can split lines easily
+            for br in paragraph.find_all("br"):
+                br.replace_with("\n")
+
+            lines = paragraph.get_text(separator="\n").split("\n")
+            for line in lines:
+                # Only include non-empty lines
+                if line.strip():
+                    locations.append({
+                        "details": line.strip()
+                    })
+
+    return {
+        "name": "Flowing Tide Pub",
+        "source_url": URL,
+        "locations": locations
+    }
+
+if __name__ == "__main__":
+    result = scrape_flowing_tide()
+    print(json.dumps(result, indent=2, ensure_ascii=False))
